@@ -1,5 +1,5 @@
 # app/main.py 完整版本（关联学生学号）
-from fastapi import FastAPI, Depends, Body, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, Depends, Body, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import create_engine, text
@@ -15,11 +15,9 @@ import mimetypes
 import zipfile
 import requests
 import dashscope
-from dashscope import MultiModalConversation, Generation
+from dashscope import MultiModalConversation
 from typing import List, Optional
 from openpyxl import load_workbook
-from pypdf import PdfReader
-from docx import Document
 from fastapi.security import OAuth2PasswordBearer  # 关键：导入OAuth2PasswordBearer
 from xml.etree import ElementTree as ET
 
@@ -91,7 +89,6 @@ class Paper(Base):
     __tablename__ = "paper"
     id = Column(Integer, primary_key=True, index=True)
     achievement_id = Column(Integer, ForeignKey("student_achievements.id"), nullable=False, comment="关联成果主表ID")
-    self_score = Column(Float, nullable=True, comment="自评分")
     title = Column(String(200), nullable=False, comment="论文标题")
     journal = Column(String(100), nullable=True, comment="发表期刊")
     publish_date = Column(String(20), nullable=True, comment="发表日期")
@@ -110,7 +107,6 @@ class PolicyReport(Base):
     __tablename__ = "policy_report"
     id = Column(Integer, primary_key=True, index=True)
     achievement_id = Column(Integer, ForeignKey("student_achievements.id"), nullable=False, comment="关联成果主表ID")
-    self_score = Column(Float, nullable=True, comment="自评分")
     title = Column(String(200), nullable=False, comment="报告标题")
     adopt_unit = Column(String(100), nullable=True, comment="采纳单位")
     submit_date = Column(String(20), nullable=True, comment="提交日期")
@@ -129,7 +125,6 @@ class AcademicExchange(Base):
     __tablename__ = "academic_exchange"
     id = Column(Integer, primary_key=True, index=True)
     achievement_id = Column(Integer, ForeignKey("student_achievements.id"), nullable=False, comment="关联成果主表ID")
-    self_score = Column(Float, nullable=True, comment="自评分")
     name = Column(String(200), nullable=False, comment="交流名称")
     participate_type = Column(String(50), nullable=True, comment="参与类型")
     exchange_date = Column(String(20), nullable=True, comment="交流日期")
@@ -148,7 +143,6 @@ class VolunteerService(Base):
     __tablename__ = "volunteer_service"
     id = Column(Integer, primary_key=True, index=True)
     achievement_id = Column(Integer, ForeignKey("student_achievements.id"), nullable=False, comment="关联成果主表ID")
-    self_score = Column(Float, nullable=True, comment="自评分")
     project_name = Column(String(200), nullable=False, comment="项目名称")
     hours = Column(Integer, default=0, comment="服务时长")
     service_date = Column(String(20), nullable=True, comment="服务日期")
@@ -167,7 +161,6 @@ class Award(Base):
     __tablename__ = "award"
     id = Column(Integer, primary_key=True, index=True)
     achievement_id = Column(Integer, ForeignKey("student_achievements.id"), nullable=False, comment="关联成果主表ID")
-    self_score = Column(Float, nullable=True, comment="自评分")
     name = Column(String(200), nullable=False, comment="奖项名称")
     level = Column(String(50), nullable=True, comment="奖项级别")
     award_date = Column(String(20), nullable=True, comment="获奖日期")
@@ -228,8 +221,8 @@ class CustomAchievement(Base):
     __tablename__ = "custom_achievement"
     id = Column(Integer, primary_key=True, index=True)
     achievement_id = Column(Integer, ForeignKey("student_achievements.id"), nullable=False, comment="关联成果主表ID")
-    self_score = Column(Float, nullable=True, comment="自评分")
     type_id = Column(Integer, ForeignKey("achievement_type.id"), nullable=False, comment="成果类型ID")
+    self_score = Column(Float, nullable=True, comment="提交分数")
     content_json = Column(Text, nullable=False, comment="字段内容JSON")
     review_score = Column(Float, nullable=True, comment="评分")
     rescore_score = Column(Float, nullable=True, comment="复核评分")
@@ -391,6 +384,146 @@ REVIEW_MODEL_MAP = {
     "custom": (CustomAchievement, "content_json")
 }
 
+EXCEL_ACHIEVEMENT_TYPE_TEMPLATES = [
+    {
+        "name": "论文成果",
+        "fields": [
+            {"key": "title", "label": "论文标题"},
+            {"key": "journal", "label": "刊物名称"},
+            {"key": "publish_date", "label": "发表时间"},
+            {"key": "journal_type", "label": "刊物类别（CSSCI/Q1/Q2/Q3/Q4/其他）"},
+            {"key": "level", "label": "层次（A1/A2/B/C/D/E）"},
+            {"key": "first_org", "label": "第一署名单位"},
+            {"key": "is_first_org_ccnu_or_econ", "label": "是否为华中师范大学或华中师范大学经济与工商管理学院（是/否）"},
+            {"key": "corresponding_author", "label": "通讯作者"},
+            {"key": "first_author", "label": "第一作者姓名"},
+            {"key": "is_first_author_student", "label": "第一作者是否为华中师范大学经济与工商管理学院学生（是/否）"},
+            {"key": "second_author", "label": "第二作者姓名"},
+            {"key": "is_second_author_student", "label": "第二作者是否为本院学生（是/否）"},
+            {"key": "third_author", "label": "第三作者姓名"},
+            {"key": "is_third_author_student", "label": "第三作者是否为本院学生（是/否）"},
+            {"key": "fourth_author", "label": "第四作者姓名"},
+            {"key": "support_material_desc", "label": "支撑材料说明"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "科研项目",
+        "fields": [
+            {"key": "project_name", "label": "项目名称"},
+            {"key": "project_type", "label": "项目类型"},
+            {"key": "start_date", "label": "立项时间"},
+            {"key": "project_lead", "label": "项目主持人姓名"},
+            {"key": "team_member_1", "label": "团队成员1姓名"},
+            {"key": "team_count", "label": "团队总人数"},
+            {"key": "team_member_2", "label": "团队成员2姓名"},
+            {"key": "team_member_3", "label": "团队成员3姓名"},
+            {"key": "support_material_desc", "label": "支撑材料说明"}
+        ]
+    },
+    {
+        "name": "智库成果",
+        "fields": [
+            {"key": "report_name", "label": "报告名称"},
+            {"key": "adopt_org", "label": "采纳单位/批示领导"},
+            {"key": "adopt_date", "label": "采纳/批示时间"},
+            {"key": "level", "label": "层次（A1/A2/B/C1/C2/其他）"},
+            {"key": "first_org", "label": "第一署名单位"},
+            {"key": "is_first_org_ccnu_or_econ", "label": "是否为华中师范大学或华中师范大学经济与工商管理学院（是/否）"},
+            {"key": "first_author", "label": "第一作者姓名"},
+            {"key": "is_first_author_teacher", "label": "第一作者是否本院教师（是/否）"},
+            {"key": "second_author", "label": "第二作者姓名"},
+            {"key": "third_author", "label": "第三作者姓名"},
+            {"key": "fourth_author", "label": "第四作者姓名"},
+            {"key": "support_material_desc", "label": "支撑材料说明"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "著作",
+        "fields": [
+            {"key": "book_name", "label": "著作名称"},
+            {"key": "publisher", "label": "出版社"},
+            {"key": "publish_date", "label": "出版时间"},
+            {"key": "level", "label": "层次（A/B/C/D）"},
+            {"key": "author_identity", "label": "作者身份（是/否）"},
+            {"key": "contribution", "label": "贡献情况"},
+            {"key": "support_material_desc", "label": "支撑材料说明"}
+        ]
+    },
+    {
+        "name": "参加学生工作",
+        "fields": [
+            {"key": "post_name", "label": "任职岗位/职务"},
+            {"key": "start_date", "label": "开始日期"},
+            {"key": "end_date", "label": "结束日期"},
+            {"key": "assessment_result", "label": "考核结果（优秀/合格/不合格/其他考核情况）"},
+            {"key": "post_description", "label": "岗位说明"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "参与竞赛获奖",
+        "fields": [
+            {"key": "competition_name", "label": "赛事名称"},
+            {"key": "completion_level", "label": "认定分级"},
+            {"key": "event_type", "label": "赛事类别（论文类/其他竞赛类）"},
+            {"key": "award_level", "label": "赛事级别（国家级/省级/校级/院级）"},
+            {"key": "award_name", "label": "奖次（特等奖/一等奖/二等奖/三等奖/名次）"},
+            {"key": "competition_group", "label": "获奖时间组别"},
+            {"key": "cooperation_type", "label": "合作类型（独作/多人合作-2人/多人合作-3人及以上）"},
+            {"key": "first_author", "label": "第一作者姓名"},
+            {"key": "second_author", "label": "第二作者姓名"},
+            {"key": "third_author", "label": "第三作者姓名"},
+            {"key": "support_material_desc", "label": "支撑材料说明"}
+        ]
+    },
+    {
+        "name": "荣誉表彰",
+        "fields": [
+            {"key": "honor_name", "label": "荣誉名称"},
+            {"key": "level", "label": "级别（国家级/省级/校级/院级）"},
+            {"key": "award_date", "label": "获奖时间"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "参与志愿服务",
+        "fields": [
+            {"key": "service_hours", "label": "志愿服务时长（小时）"},
+            {"key": "service_date", "label": "志愿服务日期"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "职业资格认证",
+        "fields": [
+            {"key": "certificate_name", "label": "资格考试名称"},
+            {"key": "subjects", "label": "通过科目名称"},
+            {"key": "pass_date", "label": "通过考试日期"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "参与活动",
+        "fields": [
+            {"key": "activity_type", "label": "活动类别（文艺体育类/学术发展类/社会实践类）"},
+            {"key": "activity_name", "label": "活动名称"},
+            {"key": "activity_duration", "label": "活动时长"},
+            {"key": "activity_count", "label": "活动次数"},
+            {"key": "is_offline_review_requested", "label": "是否申请线下审核（是/否）"}
+        ]
+    },
+    {
+        "name": "加分项",
+        "fields": [
+            {"key": "special_case", "label": "无缺课情况（是/否）"},
+            {"key": "extra_contribution", "label": "其他加分说明"},
+            {"key": "extra_times", "label": "次数"}
+        ]
+    }
+]
+
 def get_or_init_score_formula(db: Session) -> ScoreFormula:
     formula = db.query(ScoreFormula).order_by(ScoreFormula.id.asc()).first()
     if formula:
@@ -451,6 +584,32 @@ def ensure_achievement_schema():
         ])
         for table_name in ["paper", "policy_report", "academic_exchange", "volunteer_service", "award", "custom_achievement"]:
             ensure_table_columns(conn, table_name, REVIEW_COLUMNS)
+        ensure_table_columns(conn, "custom_achievement", [
+            ("self_score", "FLOAT")
+        ])
+
+def sync_excel_achievement_types(db: Session):
+    existing = db.query(AchievementType).all()
+    existing_map = {item.name: item for item in existing}
+    active_names = {entry["name"] for entry in EXCEL_ACHIEVEMENT_TYPE_TEMPLATES}
+    for item in existing:
+        item.is_active = item.name in active_names
+        item.update_time = datetime.now()
+    for entry in EXCEL_ACHIEVEMENT_TYPE_TEMPLATES:
+        current = existing_map.get(entry["name"])
+        if current:
+            current.fields_json = json.dumps(entry["fields"], ensure_ascii=False)
+            current.is_active = True
+            current.update_time = datetime.now()
+        else:
+            db.add(AchievementType(
+                name=entry["name"],
+                fields_json=json.dumps(entry["fields"], ensure_ascii=False),
+                is_active=True,
+                create_time=datetime.now(),
+                update_time=datetime.now()
+            ))
+    db.commit()
 
 def serialize_document(doc: AchievementDocument) -> dict:
     return {
@@ -1459,49 +1618,17 @@ async def upload_image(file: UploadFile = File(...)):
 
 @app.post("/submit/achievements")
 async def submit_achievements(
-    request: Request,
+    student_id: str = Body(...),
+    paperList: List[dict] = Body([]),
+    policyList: List[dict] = Body([]),
+    academicList: List[dict] = Body([]),
+    volunteerList: List[dict] = Body([]),
+    awardList: List[dict] = Body([]),
+    customList: List[dict] = Body([]),
     db: Session = Depends(get_db)
 ):
     try:
-        try:
-            payload = await request.json()
-        except Exception:
-            payload = {}
-        def parse_self_score(value):
-            if value is None:
-                return None
-            text = str(value).strip()
-            if text == "":
-                return None
-            try:
-                return float(text)
-            except Exception:
-                return None
-
-        def get_self_score_value(item):
-            if not isinstance(item, dict):
-                return None
-            if item.get("self_score") is not None:
-                return item.get("self_score")
-            if item.get("selfScore") is not None:
-                return item.get("selfScore")
-            if item.get("selfscore") is not None:
-                return item.get("selfscore")
-            return None
-
-        if not isinstance(payload, dict):
-            return {"success": False, "message": "提交数据格式错误"}
-        student_id = str(payload.get("student_id", "")).strip()
-        paper_items = payload.get("paperList", []) or []
-        policy_items = payload.get("policyList", []) or []
-        academic_items = payload.get("academicList", []) or []
-        volunteer_items = payload.get("volunteerList", []) or []
-        award_items = payload.get("awardList", []) or []
-        custom_items = payload.get("customList", []) or []
-        if not student_id:
-            return {"success": False, "message": "学号不能为空"}
         student = db.query(StudentUser).filter(StudentUser.student_id == student_id).first()
-
         if not student:
             return {
                 "success": False,
@@ -1519,17 +1646,13 @@ async def submit_achievements(
         db.refresh(achievement)
         achievement_id = achievement.id
 
-        for paper in paper_items:
+        for paper in paperList:
             if paper.get("title"):
-                paper_self_score = parse_self_score(get_self_score_value(paper))
-                if paper_self_score is None:
-                    return {"success": False, "message": "论文成果缺少自评分，请补充后提交"}
                 new_paper = Paper(
                     achievement_id=achievement_id,
                     title=paper.get("title"),
                     journal=paper.get("journal"),
                     publish_date=paper.get("date"),
-                    self_score=paper_self_score,
                     review_status="pending"
                 )
                 db.add(new_paper)
@@ -1538,17 +1661,13 @@ async def submit_achievements(
                 all_docs = list(paper.get("documents", []) or []) + list(paper.get("images", []) or [])
                 append_documents_for_item(db, achievement_id, "paper", new_paper.id, all_docs)
 
-        for policy in policy_items:
+        for policy in policyList:
             if policy.get("title"):
-                policy_self_score = parse_self_score(get_self_score_value(policy))
-                if policy_self_score is None:
-                    return {"success": False, "message": "资政报告缺少自评分，请补充后提交"}
                 new_policy = PolicyReport(
                     achievement_id=achievement_id,
                     title=policy.get("title"),
                     adopt_unit=policy.get("adopt_unit"),
                     submit_date=policy.get("date"),
-                    self_score=policy_self_score,
                     review_status="pending"
                 )
                 db.add(new_policy)
@@ -1558,17 +1677,13 @@ async def submit_achievements(
                 append_documents_for_item(db, achievement_id, "policy", new_policy.id, all_docs)
 
         participate_types = ['参会', '报告发言', '墙报展示', '其他']
-        for academic in academic_items:
+        for academic in academicList:
             if academic.get("name"):
-                academic_self_score = parse_self_score(get_self_score_value(academic))
-                if academic_self_score is None:
-                    return {"success": False, "message": "学术交流缺少自评分，请补充后提交"}
                 new_academic = AcademicExchange(
                     achievement_id=achievement_id,
                     name=academic.get("name"),
                     participate_type=participate_types[int(academic.get("typeIndex", 0))],
                     exchange_date=academic.get("date"),
-                    self_score=academic_self_score,
                     review_status="pending"
                 )
                 db.add(new_academic)
@@ -1577,17 +1692,13 @@ async def submit_achievements(
                 all_docs = list(academic.get("documents", []) or []) + list(academic.get("images", []) or [])
                 append_documents_for_item(db, achievement_id, "academic", new_academic.id, all_docs)
 
-        for volunteer in volunteer_items:
+        for volunteer in volunteerList:
             if volunteer.get("project_name"):
-                volunteer_self_score = parse_self_score(get_self_score_value(volunteer))
-                if volunteer_self_score is None:
-                    return {"success": False, "message": "志愿服务缺少自评分，请补充后提交"}
                 new_volunteer = VolunteerService(
                     achievement_id=achievement_id,
                     project_name=volunteer.get("project_name"),
                     hours=int(volunteer.get("hours", 0)),
                     service_date=volunteer.get("date"),
-                    self_score=volunteer_self_score,
                     review_status="pending"
                 )
                 db.add(new_volunteer)
@@ -1597,17 +1708,13 @@ async def submit_achievements(
                 append_documents_for_item(db, achievement_id, "volunteer", new_volunteer.id, all_docs)
 
         award_levels = ['校级', '市级', '省级', '国家级', '国际级']
-        for award in award_items:
+        for award in awardList:
             if award.get("name"):
-                award_self_score = parse_self_score(get_self_score_value(award))
-                if award_self_score is None:
-                    return {"success": False, "message": "获奖荣誉缺少自评分，请补充后提交"}
                 new_award = Award(
                     achievement_id=achievement_id,
                     name=award.get("name"),
                     level=award_levels[int(award.get("levelIndex", 0))],
                     award_date=award.get("date"),
-                    self_score=award_self_score,
                     review_status="pending"
                 )
                 db.add(new_award)
@@ -1616,7 +1723,7 @@ async def submit_achievements(
                 all_docs = list(award.get("documents", []) or []) + list(award.get("images", []) or [])
                 append_documents_for_item(db, achievement_id, "award", new_award.id, all_docs)
 
-        for custom_item in custom_items:
+        for custom_item in customList:
             try:
                 type_id = int(custom_item.get("type_id"))
             except Exception:
@@ -1627,14 +1734,11 @@ async def submit_achievements(
             content_obj = custom_item.get("content", {})
             if not isinstance(content_obj, dict):
                 continue
-            custom_self_score = parse_self_score(get_self_score_value(custom_item))
-            if custom_self_score is None:
-                return {"success": False, "message": "自定义成果缺少自评分，请补充后提交"}
             new_custom = CustomAchievement(
                 achievement_id=achievement_id,
                 type_id=type_id,
+                self_score=float(custom_item.get("self_score", 0)) if str(custom_item.get("self_score", "")).strip() != "" else None,
                 content_json=json.dumps(content_obj, ensure_ascii=False),
-                self_score=custom_self_score,
                 review_status="pending"
             )
             db.add(new_custom)
@@ -1750,7 +1854,7 @@ async def get_achievement_detail(
                 item_data = {
                     "id": item.id,
                     "documents": get_documents_for_item(db, item_type, item.id),
-                    "self_score": item.self_score,
+                    "self_score": item.self_score if hasattr(item, "self_score") else None,
                     "review_score": item.review_score,
                     "rescore_score": item.rescore_score,
                     "review_status": item.review_status or "pending",
@@ -1981,56 +2085,6 @@ async def review_type_score(
         "message": "类型评分成功"
     }
 
-@app.post("/admin/review-item/{item_type}/{item_id}")
-async def review_item_score(
-    item_type: str,
-    item_id: int,
-    data: dict = Body(...),
-    db: Session = Depends(get_db)
-):
-    item_type = (item_type or "").lower()
-    model_info = REVIEW_MODEL_MAP.get(item_type)
-    if not model_info:
-        return {"code": 400, "data": None, "message": "成果类型错误"}
-    model_cls = model_info[0]
-    
-    item = db.query(model_cls).filter(model_cls.id == item_id).first()
-    if not item:
-        return {"code": 404, "data": None, "message": "成果项不存在"}
-
-    score = data.get("score")
-    rescore_score = data.get("rescore_score")
-    review_comment = str(data.get("review_comment") or "")
-    rescore_comment = str(data.get("rescore_comment") or "")
-
-    try:
-        if score is not None:
-            score = float(score)
-            if score < 0 or score > 100: return {"code": 400, "data": None, "message": "评分范围必须在0到100"}
-            item.review_score = score
-        if rescore_score is not None:
-            rescore_score = float(rescore_score)
-            if rescore_score < 0 or rescore_score > 100: return {"code": 400, "data": None, "message": "复核评分范围必须在0到100"}
-            item.rescore_score = rescore_score
-    except Exception:
-        return {"code": 400, "data": None, "message": "评分格式错误"}
-
-    item.review_comment = review_comment
-    item.rescore_comment = rescore_comment
-    item.review_time = datetime.now()
-    
-    if item.rescore_score is not None:
-        item.review_status = "rescored"
-    elif item.review_score is not None:
-        item.review_status = "reviewed"
-    
-    achievement = db.query(StudentAchievement).filter(StudentAchievement.id == item.achievement_id).first()
-    if achievement:
-        recalculate_achievement_score(db, achievement)
-
-    db.commit()
-    return {"code": 200, "data": {"item_id": item_id, "score": item.review_score, "rescore_score": item.rescore_score}, "message": "评分成功"}
-
 @app.get("/admin/score-formula")
 async def get_score_formula(db: Session = Depends(get_db)):
     formula = get_or_init_score_formula(db)
@@ -2190,6 +2244,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import dashscope
+from dashscope import MultiModalConversation
+
 @app.post("/student/ai-extract-fields")
 async def ai_extract_fields(
     achievement_type: str = Body(...),
@@ -2261,115 +2318,79 @@ async def ai_extract_fields(
     if not target_fields:
         return {"code": 200, "data": {"suggestions": {}, "enabled": True}, "message": f"未知的成果类型: {achievement_type}"}
 
-    # 3. 筛选文件
-    image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
-    doc_extensions = {".pdf", ".docx", ".txt"}
-    
-    image_files = []
-    doc_files = []
-    
+    # 3. 筛选图片并构建URL
     server_base_url = os.getenv("SERVER_BASE_URL", "https://api.aipro.ren").rstrip("/")
+    image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+    image_urls = []
     
     for path in (document_paths or []):
         if not path:
             continue
         file_ext = os.path.splitext(path)[1].lower()
-        
-        # 优先使用本地路径
-        local_path = os.path.join(UPLOAD_DIR, path)
-        if not os.path.exists(local_path):
-            continue
-        abs_path = os.path.abspath(local_path)
-        
         if file_ext in image_extensions:
-            image_files.append(f"file://{abs_path}")
-        elif file_ext in doc_extensions:
-            doc_files.append(abs_path)
+            # 优先使用本地路径（file://），避免公网下载超时问题
+            local_path = os.path.join(UPLOAD_DIR, path)
+            if os.path.exists(local_path):
+                abs_path = os.path.abspath(local_path)
+                image_urls.append(f"file://{abs_path}")
+            else:
+                image_urls.append(f"{server_base_url}/uploads/{path}")
 
-    if not image_files and not doc_files:
-        return {"code": 200, "data": {"suggestions": {}, "enabled": True}, "message": "未找到支持的文件(图片/PDF/Word/TXT)"}
+    if not image_urls:
+        return {"code": 200, "data": {"suggestions": {}, "enabled": True}, "message": "未找到图片文件"}
 
-    # 4. 提取文档内容
-    doc_content = ""
-    for f in doc_files:
-        ext = os.path.splitext(f)[1].lower()
-        try:
-            text = ""
-            if ext == ".pdf":
-                reader = PdfReader(f)
-                for page in reader.pages:
-                    text += (page.extract_text() or "") + "\n"
-            elif ext == ".docx":
-                doc = Document(f)
-                for para in doc.paragraphs:
-                    text += para.text + "\n"
-            elif ext == ".txt":
-                with open(f, "r", encoding="utf-8") as tf:
-                    text = tf.read()
-            
-            if text.strip():
-                doc_content += f"\n--- 文档内容 ({os.path.basename(f)}) ---\n{text[:50000]}\n" # Limit 50k chars per doc
-        except Exception as e:
-            print(f"Error reading {f}: {e}")
-
-    # 5. 构建Prompt
+    # 4. 构建Prompt
     fields_desc = ", ".join([f"{f['key']}({f['label']})" for f in target_fields])
-    prompt = f"请提取以下字段信息：{fields_desc}。请直接返回JSON格式数据，不要包含Markdown标记。"
-    
-    if doc_content:
-        prompt += f"\n\n参考文档内容:\n{doc_content}"
+    prompt = f"请识别图片内容，提取以下字段信息：{fields_desc}。请直接返回JSON格式数据，不要包含Markdown标记。"
 
-    # 6. 调用API
+    # 5. 调用百炼API (使用dashscope SDK)
     try:
-        if image_files:
-            # 使用多模态模型 (qwen-vl-plus)
-            messages = [{"role": "user", "content": []}]
-            for img_url in image_files:
-                messages[0]["content"].append({"image": img_url})
-            messages[0]["content"].append({"text": prompt})
-            
-            model_name = "qwen-vl-plus"
-            response = MultiModalConversation.call(model=model_name, messages=messages)
-            
-            # Response parsing for VL model
-            if response.status_code == 200:
-                result_text = ""
-                if response.output and response.output.choices:
-                    message_content = response.output.choices[0].message.content
-                    if isinstance(message_content, list):
-                        for item in message_content:
-                            if "text" in item:
-                                result_text += item["text"]
-                    elif isinstance(message_content, str):
-                        result_text = message_content
-                content = result_text
-            else:
-                return {"code": 500, "data": {"suggestions": {}, "enabled": True}, "message": f"VL模型调用失败: {response.code} - {response.message}"}
-                
-        else:
-            # 纯文本模型 (qwen-plus)
-            messages = [{"role": "user", "content": prompt}]
-            model_name = "qwen-plus" 
-            
-            response = Generation.call(model=model_name, messages=messages, result_format='message')
-            
-            # Response parsing for Generation model
-            if response.status_code == 200:
-                content = response.output.choices[0].message.content
-            else:
-                return {"code": 500, "data": {"suggestions": {}, "enabled": True}, "message": f"LLM调用失败: {response.code} - {response.message}"}
+        messages = [
+            {
+                "role": "user",
+                "content": []
+            }
+        ]
+        # Add images
+        for url in image_urls:
+            messages[0]["content"].append({"image": url})
+        # Add text prompt
+        messages[0]["content"].append({"text": prompt})
 
-        # Common JSON parsing
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.endswith("```"):
-            content = content[:-3]
+        # Set model name (qwen-vl-plus)
+        model_name = "qwen-vl-plus" 
+
+        response = MultiModalConversation.call(
+            model=model_name,
+            messages=messages
+        )
         
-        suggestions = json.loads(content.strip())
-        return {"code": 200, "data": {"suggestions": suggestions, "enabled": True}, "message": "提取成功"}
+        if response.status_code == 200:
+            result_text = ""
+            if response.output and response.output.choices:
+                message_content = response.output.choices[0].message.content
+                if isinstance(message_content, list):
+                    for item in message_content:
+                        if "text" in item:
+                            result_text += item["text"]
+                elif isinstance(message_content, str):
+                    result_text = message_content
+            
+            # 清理Markdown标记
+            if result_text.startswith("```json"):
+                result_text = result_text[7:]
+            if result_text.endswith("```"):
+                result_text = result_text[:-3]
+            
+            suggestions = json.loads(result_text.strip())
+            return {"code": 200, "data": {"suggestions": suggestions, "enabled": True}, "message": "提取成功"}
+        else:
+            return {"code": 500, "data": {"suggestions": {}, "enabled": True}, "message": f"模型调用失败: {response.code} - {response.message}"}
 
     except Exception as e:
         return {"code": 500, "data": {"suggestions": {}, "enabled": True}, "message": f"提取失败: {str(e)}"}
+
+
 # 9. 静态文件访问（图片预览）
 @app.get("/uploads/{file_name}")
 async def get_uploaded_file(file_name: str):
@@ -2428,6 +2449,17 @@ async def startup():
             db.add_all(roles)
             db.commit()
         get_or_init_score_formula(db)
+        formula = get_or_init_score_formula(db)
+        formula.weights_json = json.dumps({
+            "paper": 0.0,
+            "policy": 0.0,
+            "academic": 0.0,
+            "volunteer": 0.0,
+            "award": 0.0,
+            "custom": 1.0
+        }, ensure_ascii=False)
+        formula.update_time = datetime.now()
+        db.commit()
         admin_user = db.query(AdminUser).filter(AdminUser.username == "admin").first()
         if not admin_user:
             admin_role = db.query(AdminRole).filter(AdminRole.name == "管理员").first()
@@ -2462,23 +2494,7 @@ async def startup():
             )
             db.add(whitelist_student)
             db.commit()
-        if db.query(AchievementType).count() == 0:
-            default_types = [
-                {"name": "论文成果", "fields": [{"key": "title", "label": "论文标题"}, {"key": "journal", "label": "发表期刊"}, {"key": "date", "label": "发表日期"}]},
-                {"name": "资政报告", "fields": [{"key": "title", "label": "报告标题"}, {"key": "adopt_unit", "label": "采纳单位"}, {"key": "date", "label": "提交日期"}]},
-                {"name": "学术交流", "fields": [{"key": "name", "label": "交流名称"}, {"key": "typeIndex", "label": "参与类型"}, {"key": "date", "label": "交流日期"}]},
-                {"name": "志愿服务", "fields": [{"key": "project_name", "label": "项目名称"}, {"key": "hours", "label": "服务时长"}, {"key": "date", "label": "服务日期"}]},
-                {"name": "获奖荣誉", "fields": [{"key": "name", "label": "奖项名称"}, {"key": "levelIndex", "label": "奖项级别"}, {"key": "date", "label": "获奖日期"}]}
-            ]
-            for entry in default_types:
-                db.add(AchievementType(
-                    name=entry["name"],
-                    fields_json=json.dumps(entry["fields"], ensure_ascii=False),
-                    is_active=True,
-                    create_time=datetime.now(),
-                    update_time=datetime.now()
-                ))
-            db.commit()
+        sync_excel_achievement_types(db)
     finally:
         db.close()
 
